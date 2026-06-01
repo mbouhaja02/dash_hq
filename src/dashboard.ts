@@ -36,14 +36,28 @@ export interface DashboardGroup {
   lastAudit?: string;
 }
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
+const env = import.meta.env as unknown as Record<string, string | undefined>;
+
+const supabaseUrl = (
+  env.VITE_SUPABASE_URL ??
+  env.NEXT_PUBLIC_SUPABASE_URL ??
+  'https://moucagzxoucxytgoamgl.supabase.co'
+)?.trim();
+const supabaseAnonKey = (
+  env.VITE_SUPABASE_ANON_KEY ??
+  env.VITE_SUPABASE_PUBLISHABLE_KEY ??
+  env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
+  env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
+  'sb_publishable_J3uWerqtMwpC9YjA9zC-6g_G1QCBigL'
+)?.trim();
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 
 const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl ?? '', supabaseAnonKey ?? '')
   : null;
+
+export const supabaseClient = supabase;
 
 function numeric(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
@@ -81,7 +95,7 @@ export async function loadAnalyses(options: {
   limit?: number;
 }): Promise<AnalysisRow[]> {
   if (!supabase) {
-    throw new Error('Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY.');
+    throw new Error('Variables Supabase manquantes: ajoute VITE_SUPABASE_URL et VITE_SUPABASE_PUBLISHABLE_KEY.');
   }
 
   let query = supabase

@@ -14,4 +14,5 @@ export const dashboardConfig = {
   riskTitle: 'Audits critiques reseau',
   recentTitle: 'Derniers audits synchronises',
   limit: 1000,
+  refreshMs: 15000,
 };
