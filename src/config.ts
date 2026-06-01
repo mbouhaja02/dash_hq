@@ -15,4 +15,8 @@ export const dashboardConfig = {
   recentTitle: 'Derniers audits synchronises',
   limit: 1000,
   refreshMs: 15000,
+  // Hypotheses ajustables pour la valorisation business (demo Franprix Maroc)
+  costPerFacing: 65, // MAD de CA potentiel/jour par facing vide
+  minPerManualAudit: 12, // minutes economisees par audit automatise vs manuel
+  demoLocation: 'Reseau Franprix · Maroc',
 };

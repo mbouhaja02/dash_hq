@@ -168,3 +168,16 @@ export function formatDate(value?: string): string {
     minute: '2-digit',
   }).format(new Date(value));
 }
+
+export function formatMAD(value: number): string {
+  return new Intl.NumberFormat('fr-MA', {
+    style: 'currency',
+    currency: 'MAD',
+    maximumFractionDigits: 0,
+  }).format(Math.round(Math.max(0, value)));
+}
+
+export function formatHours(minutes: number): string {
+  const hours = minutes / 60;
+  return hours >= 10 ? `${Math.round(hours)} h` : `${hours.toFixed(1)} h`;
+}
