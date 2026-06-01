@@ -10,6 +10,7 @@ import {
   supabaseClient,
 } from './dashboard';
 import { dashboardConfig } from './config';
+import { generateHqReport } from './report';
 import './styles.css';
 
 type Tone = 'danger' | 'warning' | 'success' | 'primary';
@@ -315,6 +316,28 @@ export default function App() {
   function copySnapshot() {
     void navigator.clipboard?.writeText(snapshotUrl).then(() => setCopied(true));
   }
+
+  function exportPdf() {
+    generateHqReport({
+      periode: RANGE_LABELS[range],
+      summary: {
+        avgProfitability: summary.avgProfitability,
+        avgEmptyRatio: summary.avgEmptyRatio,
+        avgBackRatio: summary.avgBackRatio,
+        audits: summary.audits,
+        stores: summary.stores,
+      },
+      counts: { stores: stores.length, highRisk: highRiskStores, critical: summary.critical },
+      worstStore: worstStore ? { store: worstStore.store, conformity: worstStore.conformity, critical: worstStore.critical } : undefined,
+      stores: stores.slice(0, 12).map((s) => ({
+        store: s.store, conformity: s.conformity, critical: s.critical, medium: s.medium,
+        emptyRatio: s.emptyRatio, backRatio: s.backRatio, shelves: s.shelves, priority: s.priority,
+      })),
+      categories: categories.map((c) => ({ category: c.category, conformity: c.conformity, critical: c.critical })),
+      timeline: timeline.map((t) => ({ label: t.label, conformity: t.conformity })),
+      thresholds: { empty: emptyTh, back: backTh },
+    });
+  }
   const worstStore = stores[0];
   const networkClean = summary.avgProfitability >= 85 && summary.critical === 0;
   const maxIssues = Math.max(1, ...timeline.map((point) => point.issues));
@@ -362,7 +385,7 @@ export default function App() {
             <div className="tool-group">
               <button className="tool-btn" onClick={() => setPanel(panel === 'settings' ? null : 'settings')} title="Reglages des seuils d'alerte">⚙</button>
               <button className="tool-btn" onClick={exportCsv} disabled={rows.length === 0} title="Exporter les magasins en CSV">CSV</button>
-              <button className="tool-btn" onClick={() => window.print()} disabled={rows.length === 0} title="Generer un rapport PDF">PDF</button>
+              <button className="tool-btn" onClick={exportPdf} disabled={rows.length === 0} title="Generer un rapport PDF professionnel">PDF</button>
               <button className="tool-btn" onClick={toggleFullscreen} title="Mode presentation plein ecran">⛶</button>
               <button className="tool-btn" onClick={() => setPanel(panel === 'share' ? null : 'share')} title="Partager / QR code">⤴</button>
             </div>

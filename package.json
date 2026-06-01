@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.100.1",
+    "jspdf": "^2.5.2",
+    "jspdf-autotable": "^3.8.4",
     "qrcode.react": "^4.2.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
