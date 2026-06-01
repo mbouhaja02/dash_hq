@@ -278,7 +278,6 @@ export default function App() {
   const [backTh, setBackTh] = useState(initial.backTh);
   const [panel, setPanel] = useState<null | 'settings' | 'share'>(null);
   const [copied, setCopied] = useState(false);
-  const [demo, setDemo] = useState(false);
   const [boost, setBoost] = useState(5);
   const [showSplash, setShowSplash] = useState(true);
   const [splashProgress, setSplashProgress] = useState(8);
@@ -312,12 +311,6 @@ export default function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [panel]);
-
-  function toggleDemo() {
-    setPanel(null);
-    setDemo((d) => !d);
-    toggleFullscreen();
-  }
 
   const scopedRows = useMemo(() => scopeByRange(rows, range), [rows, range]);
   const summary = useMemo(() => summarize(scopedRows), [scopedRows]);
@@ -385,6 +378,16 @@ export default function App() {
   const maxIssues = Math.max(1, ...timeline.map((point) => point.issues));
   const latestTimeline = timeline[timeline.length - 1];
   const highRiskStores = stores.filter((store) => store.priority === 'Haute').length;
+  const underperformingStores = stores.filter((store) => store.priority !== 'Faible').length;
+  const riskCategories = categories.filter((category) => category.critical > 0 || category.conformity < 85).length;
+  const auditsThisMonth = scopedRows.filter((row) => {
+    const audit = new Date(row.audit_date);
+    const now = new Date();
+    return audit.getMonth() === now.getMonth() && audit.getFullYear() === now.getFullYear();
+  }).length;
+  const correctionRate = latestTimeline
+    ? (latestTimeline.corrected / Math.max(1, latestTimeline.corrected + latestTimeline.issues)) * 100
+    : 0;
 
   // Valorisation business (hypotheses ajustables dans config.ts)
   const ruptureCostDaily = summary.emptySpaces * dashboardConfig.costPerFacing;
@@ -395,9 +398,9 @@ export default function App() {
   return (
     <>
       {showSplash ? (
-        <Splash brand="ShelfGuide HQ" sub={dashboardConfig.demoLocation} progress={splashProgress} onSkip={() => setShowSplash(false)} />
+        <Splash brand="ShelfGuide HQ" sub={dashboardConfig.networkLabel} progress={splashProgress} onSkip={() => setShowSplash(false)} />
       ) : null}
-      <main className={`app-frame${demo ? ' demo' : ''}`}>
+      <main className="app-frame">
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">HQ</div>
@@ -411,6 +414,7 @@ export default function App() {
           <a className="active" href="#overview">Reseau</a>
           <a href="#stores">Magasins</a>
           <a href="#categories">Categories</a>
+          <a href="#alerts">Alertes</a>
           <a href="#timeline">Evolution</a>
         </nav>
 
@@ -424,14 +428,11 @@ export default function App() {
       <section className="workspace">
         <header className="page-header" id="overview">
           <div>
-            <p className="eyebrow">Direction reseau</p>
-            <h1>Pilotage performance magasins</h1>
-            <p className="subtitle">Vue HQ des magasins a risque, categories faibles et pertes commerciales detectees.</p>
+            <p className="eyebrow">ShelfGuide HQ</p>
+            <h1>Dashboard HQ</h1>
+            <p className="subtitle">Pilotez la performance rayon, les ruptures et l'execution merchandising sur l'ensemble du reseau.</p>
           </div>
           <div className="header-actions">
-            <button className="demo-btn" onClick={toggleDemo} aria-pressed={demo} title="Mode presentation plein ecran">
-              {demo ? '✕ Quitter la demo' : '▶ Lancer la demo'}
-            </button>
             <div className="seg" role="group" aria-label="Periode d'analyse">
               {(['7d', '30d', 'all'] as Range[]).map((r) => (
                 <button key={r} className={range === r ? 'active' : ''} onClick={() => setRange(r)}>{RANGE_LABELS[r]}</button>
@@ -530,25 +531,19 @@ export default function App() {
             </section>
 
             <section className="metric-grid">
-              <MetricCard label="Magasins" value={String(summary.stores)} detail={`${summary.audits} audits`} />
-              <MetricCard label="Risque haut" value={String(highRiskStores)} detail="Plan action HQ" tone="danger" />
+              <MetricCard label="Magasins suivis" value={String(summary.stores)} detail={`${stores.length} magasins analyses`} />
+              <MetricCard label="Audits realises ce mois" value={String(auditsThisMonth)} detail={`${summary.audits} audits visibles`} />
+              <MetricCard label="Taux moyen de remplissage reseau" value={pct(summary.avgProfitability)} detail="Score moyen reseau" tone="success" />
               <MetricCard
-                label="Alertes critiques"
+                label="Ruptures critiques detectees"
                 value={String(summary.critical)}
                 detail={summary.critical > 0 ? 'Audits non conformes' : 'Reseau conforme'}
                 tone={summary.critical > 0 ? 'danger' : 'success'}
                 pulse={summary.critical > 0}
               />
-              <MetricCard label="Conformite" value={pct(summary.avgProfitability)} detail="Score moyen reseau" tone="success" />
-              <MetricCard
-                label="Vide moyen"
-                value={pct(summary.avgEmptyRatio)}
-                detail={`${summary.emptySpaces} facings vides`}
-                tone="warning"
-                sub={`≈ ${formatMAD(ruptureCostDaily)} CA/jour`}
-              />
-              <MetricCard label="Back-side" value={pct(summary.avgBackRatio)} detail={`${summary.backProducts} produits`} />
-              <MetricCard label="Categories" value={String(categories.length)} detail="Sous surveillance" />
+              <MetricCard label="Categories a risque" value={String(riskCategories)} detail={`${categories.length} categories suivies`} tone={riskCategories > 0 ? 'warning' : 'success'} />
+              <MetricCard label="Magasins sous performance" value={String(underperformingStores)} detail={`${highRiskStores} risque haut`} tone={underperformingStores > 0 ? 'warning' : 'success'} />
+              <MetricCard label="Taux de correction" value={pct(correctionRate)} detail="Anomalies corrigees" tone="success" />
             </section>
 
             <BusinessBand
@@ -557,7 +552,7 @@ export default function App() {
               hoursSaved={hoursSaved}
               boost={boost}
               onBoost={setBoost}
-              location={dashboardConfig.demoLocation}
+              location={dashboardConfig.networkLabel}
             />
 
             <section className="content-grid">
@@ -591,6 +586,21 @@ export default function App() {
               <section className="panel alerts-panel" id="categories">
                 <PanelTitle eyebrow="Categories" title="Familles sous performance" />
                 <CategoryList categories={categories} />
+              </section>
+
+              <section className="panel benchmark-panel">
+                <PanelTitle eyebrow="Benchmark" title="Top magasins et risques" />
+                <BenchmarkList stores={stores} />
+              </section>
+
+              <section className="panel network-alerts-panel" id="alerts">
+                <PanelTitle eyebrow="Alertes reseau" title="Priorites multi-magasins" />
+                <NetworkAlertList stores={stores} categories={categories} />
+              </section>
+
+              <section className="panel insights-panel">
+                <PanelTitle eyebrow="Insights reseau" title="Messages business" />
+                <BusinessInsightList stores={stores} categories={categories} correctionRate={correctionRate} />
               </section>
 
               <section className="panel timeline-panel" id="timeline">
@@ -804,6 +814,8 @@ function DecisionStack({ items }: { items: [string, string][] }) {
 }
 
 function CategoryList({ categories }: { categories: CategoryScore[] }) {
+  if (categories.length === 0) return <p className="muted">Aucune categorie sous performance detectee.</p>;
+
   return (
     <div className="recurring-list">
       {categories.map((category, index) => (
@@ -814,6 +826,96 @@ function CategoryList({ categories }: { categories: CategoryScore[] }) {
             <small>{category.critical} critiques - {category.audits} audits</small>
           </div>
           <em>{pct(category.conformity)}</em>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BenchmarkList({ stores }: { stores: StoreScore[] }) {
+  if (stores.length === 0) return <p className="muted">Aucun magasin disponible pour le benchmark.</p>;
+
+  const best = [...stores].sort((a, b) => b.conformity - a.conformity).slice(0, 5);
+  const risk = stores.slice(0, 5);
+
+  return (
+    <div className="benchmark-grid">
+      <div>
+        <h3>Top 5 performants</h3>
+        {best.map((store) => (
+          <div className="benchmark-row" key={`best-${store.store}`}>
+            <span>{store.store}</span>
+            <strong>{pct(store.conformity)}</strong>
+          </div>
+        ))}
+      </div>
+      <div>
+        <h3>Top 5 a risque</h3>
+        {risk.map((store) => (
+          <div className="benchmark-row" key={`risk-${store.store}`}>
+            <span>{store.store}</span>
+            <strong>{store.critical} critiques</strong>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function NetworkAlertList({ stores, categories }: { stores: StoreScore[]; categories: CategoryScore[] }) {
+  const alerts = [
+    ...stores.slice(0, 3).map((store) => ({
+      title: store.store,
+      detail: `${store.critical} critiques, ${pct(store.emptyRatio)} vide moyen`,
+      tone: toneFromPriority(store.priority),
+    })),
+    ...categories.slice(0, 2).map((category) => ({
+      title: category.category,
+      detail: `${category.emptySpaces} facings vides, ${pct(category.conformity)} conformite`,
+      tone: category.critical > 0 ? 'danger' as Tone : 'warning' as Tone,
+    })),
+  ];
+
+  if (alerts.length === 0) return <p className="muted">Aucune alerte reseau active.</p>;
+
+  return (
+    <div className="alert-list">
+      {alerts.map((alert) => (
+        <div className="alert-line" key={`${alert.title}-${alert.detail}`}>
+          <div>
+            <strong>{alert.title}</strong>
+            <small>{alert.detail}</small>
+          </div>
+          <StatusBadge tone={alert.tone} label={alert.tone === 'danger' ? 'Critique' : alert.tone === 'warning' ? 'A surveiller' : 'Correct'} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BusinessInsightList({
+  stores,
+  categories,
+  correctionRate,
+}: {
+  stores: StoreScore[];
+  categories: CategoryScore[];
+  correctionRate: number;
+}) {
+  const riskyStores = stores.filter((store) => store.priority !== 'Faible').length;
+  const weakCategory = categories[0]?.category ?? 'Aucune categorie critique';
+  const insights = [
+    `${riskyStores} magasin(s) concentrent les priorites d'intervention reseau.`,
+    `${weakCategory} presente la plus forte recurrence de ruptures.`,
+    `Le taux de correction estime est de ${pct(correctionRate)} sur la derniere periode.`,
+  ];
+
+  return (
+    <div className="recommendation-list">
+      {insights.map((item, index) => (
+        <div key={item} className="recommendation-item">
+          <span>{String(index + 1).padStart(2, '0')}</span>
+          <p>{item}</p>
         </div>
       ))}
     </div>
@@ -867,12 +969,12 @@ function Timeline({ points, maxIssues }: { points: TimelinePoint[]; maxIssues: n
         >
           <defs>
             <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="rgba(34, 227, 196, .26)" />
-              <stop offset="100%" stopColor="rgba(34, 227, 196, 0)" />
+              <stop offset="0%" stopColor="rgba(17, 191, 210, .18)" />
+              <stop offset="100%" stopColor="rgba(17, 191, 210, 0)" />
             </linearGradient>
             <linearGradient id="lineGrad" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stopColor="#22e3c4" />
-              <stop offset="100%" stopColor="#c2f24a" />
+              <stop offset="0%" stopColor="#11bfd2" />
+              <stop offset="100%" stopColor="#078da0" />
             </linearGradient>
           </defs>
 
@@ -934,11 +1036,11 @@ function Timeline({ points, maxIssues }: { points: TimelinePoint[]; maxIssues: n
           >
             <b>{hovered.label}</b>
             <div className="tt-row">
-              <span><i style={{ background: 'linear-gradient(90deg,#22e3c4,#c2f24a)' }} />Conformite</span>
+              <span><i style={{ background: '#11bfd2' }} />Conformite</span>
               <strong>{pct(hovered.conformity)}</strong>
             </div>
             <div className="tt-row">
-              <span><i style={{ background: '#ffb443' }} />Anomalies</span>
+              <span><i style={{ background: '#f59e0b' }} />Anomalies</span>
               <strong>{hovered.issues}</strong>
             </div>
             <div className="tt-row">
