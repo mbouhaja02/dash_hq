@@ -414,6 +414,7 @@ export default function App() {
           <a className="active" href="#overview">Reseau</a>
           <a href="#stores">Magasins</a>
           <a href="#categories">Categories</a>
+          <a href="#map">Carte</a>
           <a href="#alerts">Alertes</a>
           <a href="#timeline">Evolution</a>
         </nav>
@@ -586,6 +587,11 @@ export default function App() {
               <section className="panel alerts-panel" id="categories">
                 <PanelTitle eyebrow="Categories" title="Familles sous performance" />
                 <CategoryList categories={categories} />
+              </section>
+
+              <section className="panel map-panel" id="map">
+                <PanelTitle eyebrow="Carte reseau" title="Maroc & Sahara" />
+                <MoroccoMapPlaceholder />
               </section>
 
               <section className="panel benchmark-panel">
@@ -828,6 +834,37 @@ function CategoryList({ categories }: { categories: CategoryScore[] }) {
           <em>{pct(category.conformity)}</em>
         </div>
       ))}
+    </div>
+  );
+}
+
+function MoroccoMapPlaceholder() {
+  return (
+    <div className="morocco-map" aria-label="Carte vide du reseau Maroc incluant le Sahara">
+      <div className="map-canvas">
+        <div className="map-compass">N</div>
+        <svg className="morocco-outline" viewBox="0 0 320 520" role="img" aria-label="Maroc incluant le Sahara">
+          <path
+            className="map-land"
+            d="M177 20 L218 43 L230 88 L212 133 L232 179 L216 219 L246 266 L231 311 L258 363 L239 425 L260 501 L142 501 L121 447 L132 392 L104 350 L119 302 L92 260 L113 214 L96 165 L122 122 L116 75 L145 38 Z"
+          />
+          <path
+            className="map-sahara"
+            d="M119 302 L231 311 L258 363 L239 425 L260 501 L142 501 L121 447 L132 392 L104 350 Z"
+          />
+          <path
+            className="map-coast"
+            d="M145 38 C118 86 109 129 117 168 C126 213 110 235 96 260 C81 287 101 318 104 350 C110 401 111 455 142 501"
+          />
+        </svg>
+        <span className="map-label map-label-north">Maroc</span>
+        <span className="map-label map-label-sahara">Sahara</span>
+        <span className="map-label map-label-ocean">Atlantique</span>
+      </div>
+      <div className="map-empty">
+        <StatusBadge tone="warning" label="Carte vide" />
+        <p>Aucune adresse magasin n'est renseignee pour le moment. Les marqueurs seront ajoutes des que les magasins seront geolocalises.</p>
+      </div>
     </div>
   );
 }
