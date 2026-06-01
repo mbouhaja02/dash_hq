@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   AnalysisRow,
   average,
@@ -285,11 +285,11 @@ export default function App() {
                 </div>
                 <div className="score-layout">
                   <div>
-                    <strong className="score-value">{pct(summary.avgProfitability)}</strong>
+                    <strong className="score-value"><CountUp value={pct(summary.avgProfitability)} /></strong>
                     <p>{highRiskStores} magasins en priorite haute sur {stores.length} magasins analyses.</p>
                   </div>
                   <div className="score-ring" style={{ '--score': `${clamp(summary.avgProfitability)}%` } as CSSProperties}>
-                    <span>{pct(summary.avgProfitability)}</span>
+                    <span><CountUp value={pct(summary.avgProfitability)} /></span>
                   </div>
                 </div>
               </article>
@@ -365,6 +365,40 @@ export default function App() {
   );
 }
 
+function CountUp({ value }: { value: string }) {
+  const match = value.match(/^(\D*)(-?\d+(?:[.,]\d+)?)(.*)$/);
+  const target = match ? parseFloat(match[2].replace(',', '.')) : 0;
+  const [display, setDisplay] = useState(value);
+  const fromRef = useRef(0);
+
+  useEffect(() => {
+    if (!match) {
+      setDisplay(value);
+      return;
+    }
+    const prefix = match[1];
+    const suffix = match[3];
+    const decimals = /[.,]/.test(match[2]) ? match[2].split(/[.,]/)[1]?.length ?? 0 : 0;
+    const from = fromRef.current;
+    fromRef.current = target;
+    const duration = 900;
+    const start = performance.now();
+    let raf = 0;
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const current = from + (target - from) * eased;
+      setDisplay(`${prefix}${current.toFixed(decimals)}${suffix}`);
+      if (t < 1) raf = requestAnimationFrame(tick);
+      else setDisplay(value);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+
+  return <>{display}</>;
+}
+
 function StatusBadge({ tone, label }: { tone: Tone; label: string }) {
   return <span className={`status-badge ${tone}`}>{label}</span>;
 }
@@ -373,7 +407,7 @@ function MetricCard({ label, value, detail, tone = 'primary' }: { label: string;
   return (
     <article className={`metric-card ${tone}`}>
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong><CountUp value={value} /></strong>
       <small>{detail}</small>
     </article>
   );
@@ -468,6 +502,7 @@ function CategoryList({ categories }: { categories: CategoryScore[] }) {
 }
 
 function Timeline({ points, maxIssues }: { points: TimelinePoint[]; maxIssues: number }) {
+  const [active, setActive] = useState<number | null>(null);
   if (points.length === 0) return <p className="muted">Pas encore assez de donnees temporelles.</p>;
 
   const W = 720;
@@ -478,22 +513,24 @@ function Timeline({ points, maxIssues }: { points: TimelinePoint[]; maxIssues: n
   const padB = 28;
   const innerW = W - padL - padR;
   const innerH = H - padT - padB;
+  const baseY = padT + innerH;
 
   const stepX = points.length > 1 ? innerW / (points.length - 1) : 0;
   const x = (i: number) => padL + stepX * i;
   const yConf = (v: number) => padT + innerH * (1 - clamp(v, 0, 100) / 100);
-  const yIssue = (v: number) => padT + innerH * (1 - clamp(v / maxIssues, 0, 1));
+  const ySec = (v: number) => padT + innerH * (1 - clamp(v / maxIssues, 0, 1));
 
   const confPoints = points.map((p, i) => [x(i), yConf(p.conformity)] as const);
-  const issuePoints = points.map((p, i) => [x(i), yIssue(p.issues)] as const);
+  const secPoints = points.map((p, i) => [x(i), ySec(p.issues)] as const);
 
   const toPath = (pts: readonly (readonly [number, number])[]) =>
     pts.map((pt, i) => `${i === 0 ? 'M' : 'L'}${pt[0].toFixed(1)} ${pt[1].toFixed(1)}`).join(' ');
 
   const confLine = toPath(confPoints);
-  const areaPath = `${confLine} L${x(points.length - 1).toFixed(1)} ${padT + innerH} L${padL} ${padT + innerH} Z`;
-  const issueLine = toPath(issuePoints);
+  const areaPath = `${confLine} L${x(points.length - 1).toFixed(1)} ${baseY} L${padL} ${baseY} Z`;
+  const secLine = toPath(secPoints);
   const gridValues = [0, 25, 50, 75, 100];
+  const hovered = active !== null ? points[active] : null;
 
   return (
     <div className="timeline">
@@ -503,11 +540,20 @@ function Timeline({ points, maxIssues }: { points: TimelinePoint[]; maxIssues: n
       </div>
 
       <div className="chart">
-        <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Evolution de la conformite et des anomalies">
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          role="img"
+          aria-label="Evolution de la conformite et des anomalies"
+          onMouseLeave={() => setActive(null)}
+        >
           <defs>
             <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="rgba(99, 102, 241, .28)" />
+              <stop offset="0%" stopColor="rgba(99, 102, 241, .3)" />
               <stop offset="100%" stopColor="rgba(99, 102, 241, 0)" />
+            </linearGradient>
+            <linearGradient id="lineGrad" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stopColor="#6366f1" />
+              <stop offset="100%" stopColor="#8b5cf6" />
             </linearGradient>
           </defs>
 
@@ -522,7 +568,7 @@ function Timeline({ points, maxIssues }: { points: TimelinePoint[]; maxIssues: n
           })}
 
           <path className="area" d={areaPath} fill="url(#areaFill)" />
-          <path className="line anomaly" d={issueLine} />
+          <path className="line anomaly" d={secLine} />
           <path className="line compliance" d={confLine} />
 
           {confPoints.map((pt, i) => (
@@ -531,15 +577,55 @@ function Timeline({ points, maxIssues }: { points: TimelinePoint[]; maxIssues: n
               className="dot"
               cx={pt[0]}
               cy={pt[1]}
-              r={4}
+              r={active === i ? 0 : 4}
               style={{ animationDelay: `${0.9 + i * 0.08}s` }}
             />
           ))}
 
+          {hovered ? (
+            <g>
+              <line className="cursor-line" x1={x(active!)} y1={padT} x2={x(active!)} y2={baseY} />
+              <circle className="cursor-dot" cx={x(active!)} cy={yConf(hovered.conformity)} r={5.5} />
+            </g>
+          ) : null}
+
           {points.map((p, i) => (
             <text key={p.label} className="x-label" x={x(i)} y={H - 8}>{p.label}</text>
           ))}
+
+          {points.map((_, i) => (
+            <rect
+              key={`hit-${i}`}
+              className="hit"
+              x={x(i) - (stepX || innerW) / 2}
+              y={padT}
+              width={stepX || innerW}
+              height={innerH}
+              onMouseEnter={() => setActive(i)}
+            />
+          ))}
         </svg>
+
+        {hovered ? (
+          <div
+            className="chart-tooltip"
+            style={{ left: `${(x(active!) / W) * 100}%`, top: `${(yConf(hovered.conformity) / H) * 100}%` }}
+          >
+            <b>{hovered.label}</b>
+            <div className="tt-row">
+              <span><i style={{ background: 'linear-gradient(90deg,#6366f1,#8b5cf6)' }} />Conformite</span>
+              <strong>{pct(hovered.conformity)}</strong>
+            </div>
+            <div className="tt-row">
+              <span><i style={{ background: '#f59e0b' }} />Anomalies</span>
+              <strong>{hovered.issues}</strong>
+            </div>
+            <div className="tt-row">
+              <span>Corrigees</span>
+              <strong>{hovered.corrected}</strong>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="chart-foot">
