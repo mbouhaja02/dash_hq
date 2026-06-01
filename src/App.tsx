@@ -470,22 +470,81 @@ function CategoryList({ categories }: { categories: CategoryScore[] }) {
 function Timeline({ points, maxIssues }: { points: TimelinePoint[]; maxIssues: number }) {
   if (points.length === 0) return <p className="muted">Pas encore assez de donnees temporelles.</p>;
 
+  const W = 720;
+  const H = 240;
+  const padL = 34;
+  const padR = 12;
+  const padT = 16;
+  const padB = 28;
+  const innerW = W - padL - padR;
+  const innerH = H - padT - padB;
+
+  const stepX = points.length > 1 ? innerW / (points.length - 1) : 0;
+  const x = (i: number) => padL + stepX * i;
+  const yConf = (v: number) => padT + innerH * (1 - clamp(v, 0, 100) / 100);
+  const yIssue = (v: number) => padT + innerH * (1 - clamp(v / maxIssues, 0, 1));
+
+  const confPoints = points.map((p, i) => [x(i), yConf(p.conformity)] as const);
+  const issuePoints = points.map((p, i) => [x(i), yIssue(p.issues)] as const);
+
+  const toPath = (pts: readonly (readonly [number, number])[]) =>
+    pts.map((pt, i) => `${i === 0 ? 'M' : 'L'}${pt[0].toFixed(1)} ${pt[1].toFixed(1)}`).join(' ');
+
+  const confLine = toPath(confPoints);
+  const areaPath = `${confLine} L${x(points.length - 1).toFixed(1)} ${padT + innerH} L${padL} ${padT + innerH} Z`;
+  const issueLine = toPath(issuePoints);
+  const gridValues = [0, 25, 50, 75, 100];
+
   return (
     <div className="timeline">
       <div className="timeline-legend">
         <span><i className="legend-compliance" /> Conformite</span>
         <span><i className="legend-anomaly" /> Anomalies</span>
       </div>
-      <div className="timeline-bars">
-        {points.map((point) => (
-          <div className="timeline-day" key={point.label}>
-            <div className="bar-stage">
-              <span style={{ height: `${clamp(point.conformity, 8, 100)}%` }} />
-              <i style={{ height: `${clamp((point.issues / maxIssues) * 100, 8, 100)}%` }} />
-            </div>
-            <strong>{point.label}</strong>
-            <small>{pct(point.conformity)} - {point.corrected} corr.</small>
-          </div>
+
+      <div className="chart">
+        <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Evolution de la conformite et des anomalies">
+          <defs>
+            <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="rgba(99, 102, 241, .28)" />
+              <stop offset="100%" stopColor="rgba(99, 102, 241, 0)" />
+            </linearGradient>
+          </defs>
+
+          {gridValues.map((g) => {
+            const gy = yConf(g);
+            return (
+              <g key={g}>
+                <line className="grid-line" x1={padL} y1={gy} x2={W - padR} y2={gy} />
+                <text className="y-label" x={padL - 8} y={gy + 3}>{g}</text>
+              </g>
+            );
+          })}
+
+          <path className="area" d={areaPath} fill="url(#areaFill)" />
+          <path className="line anomaly" d={issueLine} />
+          <path className="line compliance" d={confLine} />
+
+          {confPoints.map((pt, i) => (
+            <circle
+              key={i}
+              className="dot"
+              cx={pt[0]}
+              cy={pt[1]}
+              r={4}
+              style={{ animationDelay: `${0.9 + i * 0.08}s` }}
+            />
+          ))}
+
+          {points.map((p, i) => (
+            <text key={p.label} className="x-label" x={x(i)} y={H - 8}>{p.label}</text>
+          ))}
+        </svg>
+      </div>
+
+      <div className="chart-foot">
+        {points.map((p) => (
+          <small key={p.label}>{pct(p.conformity)} · {p.corrected} corr.</small>
         ))}
       </div>
     </div>
