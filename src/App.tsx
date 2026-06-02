@@ -17,6 +17,7 @@ import './styles.css';
 
 type Tone = 'danger' | 'warning' | 'success' | 'primary';
 type Priority = 'Haute' | 'Moyenne' | 'Faible';
+type Theme = 'light' | 'dark';
 
 interface StoreScore {
   store: string;
@@ -48,6 +49,13 @@ interface TimelinePoint {
   conformity: number;
   issues: number;
   corrected: number;
+}
+
+interface ActivityItem {
+  avatar: string;
+  title: string;
+  meta: string;
+  tone: Tone;
 }
 
 function pct(value: number): string {
@@ -190,6 +198,14 @@ const RANGE_LABELS: Record<Range, string> = { '7d': '7 jours', '30d': '30 jours'
 const DEFAULT_EMPTY = 10;
 const DEFAULT_BACK = 7;
 
+function readTheme(): Theme {
+  try {
+    return window.localStorage.getItem('shelfguide-theme') === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
 function scopeByRange(rows: AnalysisRow[], range: Range): AnalysisRow[] {
   if (range === 'all') return rows;
   const cutoff = Date.now() - RANGE_DAYS[range] * 86400000;
@@ -281,6 +297,8 @@ export default function App() {
   const [boost, setBoost] = useState(5);
   const [showSplash, setShowSplash] = useState(true);
   const [splashProgress, setSplashProgress] = useState(8);
+  const [theme, setTheme] = useState<Theme>(readTheme);
+  const quickSearchRef = useRef<HTMLInputElement>(null);
 
   // Splash : barre de progression au premier chargement uniquement
   useEffect(() => {
@@ -311,6 +329,26 @@ export default function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [panel]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      window.localStorage.setItem('shelfguide-theme', theme);
+    } catch {
+      // Storage can be unavailable in restricted embeds.
+    }
+  }, [theme]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        quickSearchRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const scopedRows = useMemo(() => scopeByRange(rows, range), [rows, range]);
   const summary = useMemo(() => summarize(scopedRows), [scopedRows]);
@@ -388,6 +426,41 @@ export default function App() {
   const correctionRate = latestTimeline
     ? (latestTimeline.corrected / Math.max(1, latestTimeline.corrected + latestTimeline.issues)) * 100
     : 0;
+  const alertCount = highRiskStores + riskCategories;
+  const activityItems: ActivityItem[] = [
+    worstStore
+      ? {
+          avatar: 'HQ',
+          title: `${worstStore.store} place en priorite reseau`,
+          meta: `${worstStore.critical} critiques - ${formatDate(worstStore.lastAudit)}`,
+          tone: toneFromPriority(worstStore.priority),
+        }
+      : {
+          avatar: 'OK',
+          title: 'Aucun magasin prioritaire',
+          meta: 'Reseau sous controle',
+          tone: 'success',
+        },
+    categories[0]
+      ? {
+          avatar: 'CAT',
+          title: `${categories[0].category} demande un plan categorie`,
+          meta: `${categories[0].critical} critiques - ${pct(categories[0].conformity)} conformite`,
+          tone: categories[0].critical > 0 ? 'warning' : 'primary',
+        }
+      : {
+          avatar: 'CAT',
+          title: 'Categories stabilisees',
+          meta: 'Aucun signal faible detecte',
+          tone: 'success',
+        },
+    {
+      avatar: 'LIVE',
+      title: `${alertCount} signaux reseau actifs`,
+      meta: `${pct(correctionRate)} de correction sur la derniere periode`,
+      tone: alertCount > 0 ? 'danger' : 'success',
+    },
+  ];
 
   // Valorisation business (hypotheses ajustables dans config.ts)
   const ruptureCostDaily = summary.emptySpaces * dashboardConfig.costPerFacing;
@@ -415,6 +488,7 @@ export default function App() {
           <a href="#stores">Magasins</a>
           <a href="#categories">Categories</a>
           <a href="#map">Carte</a>
+          <a href="#objectives">Objectifs</a>
           <a href="#alerts">Alertes</a>
           <a href="#timeline">Evolution</a>
         </nav>
@@ -434,17 +508,35 @@ export default function App() {
             <p className="subtitle">Pilotez la performance rayon, les ruptures et l'execution merchandising sur l'ensemble du reseau.</p>
           </div>
           <div className="header-actions">
+            <label className="quick-search" aria-label="Recherche rapide">
+              <span>Search</span>
+              <input
+                ref={quickSearchRef}
+                type="search"
+                placeholder="Magasin, reseau..."
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+              <kbd>Ctrl K</kbd>
+            </label>
             <div className="seg" role="group" aria-label="Periode d'analyse">
               {(['7d', '30d', 'all'] as Range[]).map((r) => (
                 <button key={r} className={range === r ? 'active' : ''} onClick={() => setRange(r)}>{RANGE_LABELS[r]}</button>
               ))}
             </div>
             <div className="tool-group">
+              <button className="tool-btn notify-btn" title="Notifications reseau" aria-label={`${alertCount} notifications reseau`}>
+                <span className="notify-dot" aria-hidden="true" />
+                {alertCount}
+              </button>
               <button className="tool-btn" onClick={() => setPanel(panel === 'settings' ? null : 'settings')} aria-label="Reglages des seuils d'alerte" title="Reglages des seuils d'alerte">⚙</button>
               <button className="tool-btn" onClick={exportCsv} disabled={rows.length === 0} title="Exporter les magasins en CSV">CSV</button>
               <button className="tool-btn" onClick={exportPdf} disabled={rows.length === 0} title="Generer un rapport PDF professionnel">PDF</button>
               <button className="tool-btn" onClick={toggleFullscreen} aria-label="Plein ecran" title="Mode presentation plein ecran">⛶</button>
               <button className="tool-btn" onClick={() => setPanel(panel === 'share' ? null : 'share')} aria-label="Partager / QR code" title="Partager / QR code">⤴</button>
+              <button className="tool-btn theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label="Changer le theme" title="Changer le theme">
+                {theme === 'dark' ? 'Light' : 'Dark'}
+              </button>
             </div>
             <button className="refresh" onClick={() => void refresh()} disabled={loading || !isSupabaseConfigured}>
               Actualiser
@@ -480,7 +572,7 @@ export default function App() {
         </header>
 
         {error ? <div className="notice danger">{error}</div> : null}
-        {loading ? <div className="notice">Chargement des analyses Supabase...</div> : null}
+        {loading ? <DashboardSkeleton label="Chargement des analyses reseau..." /> : null}
 
         {!loading && rows.length === 0 && !error ? (
           <div className="empty">Aucune analyse disponible pour le reseau.</div>
@@ -534,17 +626,18 @@ export default function App() {
             <section className="metric-grid">
               <MetricCard label="Magasins suivis" value={String(summary.stores)} detail={`${stores.length} magasins analyses`} />
               <MetricCard label="Audits realises ce mois" value={String(auditsThisMonth)} detail={`${summary.audits} audits visibles`} />
-              <MetricCard label="Taux moyen de remplissage reseau" value={pct(summary.avgProfitability)} detail="Score moyen reseau" tone="success" />
+              <MetricCard label="Taux moyen de remplissage reseau" value={pct(summary.avgProfitability)} detail="Score moyen reseau" tone="success" spark={timeline.map((point) => point.conformity)} />
               <MetricCard
                 label="Ruptures critiques detectees"
                 value={String(summary.critical)}
                 detail={summary.critical > 0 ? 'Audits non conformes' : 'Reseau conforme'}
                 tone={summary.critical > 0 ? 'danger' : 'success'}
                 pulse={summary.critical > 0}
+                spark={timeline.map((point) => point.issues)}
               />
               <MetricCard label="Categories a risque" value={String(riskCategories)} detail={`${categories.length} categories suivies`} tone={riskCategories > 0 ? 'warning' : 'success'} />
               <MetricCard label="Magasins sous performance" value={String(underperformingStores)} detail={`${highRiskStores} risque haut`} tone={underperformingStores > 0 ? 'warning' : 'success'} />
-              <MetricCard label="Taux de correction" value={pct(correctionRate)} detail="Anomalies corrigees" tone="success" />
+              <MetricCard label="Taux de correction" value={pct(correctionRate)} detail="Anomalies corrigees" tone="success" spark={timeline.map((point) => point.corrected)} />
             </section>
 
             <BusinessBand
@@ -594,6 +687,26 @@ export default function App() {
                 <MoroccoMapPlaceholder />
               </section>
 
+              <section className="panel objectives-panel" id="objectives">
+                <PanelTitle eyebrow="Objectifs reseau" title="Pilotage des cibles HQ" />
+                <NetworkGoals
+                  conformity={summary.avgProfitability}
+                  critical={summary.critical}
+                  correctionRate={correctionRate}
+                  highRiskStores={highRiskStores}
+                />
+              </section>
+
+              <section className="panel action-plan-panel">
+                <PanelTitle eyebrow="Plan d'action HQ" title="Prochaines decisions" />
+                <HqActionPlan worstStore={worstStore} weakCategory={categories[0]} highRiskStores={highRiskStores} />
+              </section>
+
+              <section className="panel activity-panel">
+                <PanelTitle eyebrow="Activite HQ" title="Signaux qui meritent attention" />
+                <ActivityFeed items={activityItems} />
+              </section>
+
               <section className="panel benchmark-panel">
                 <PanelTitle eyebrow="Benchmark" title="Top magasins et risques" />
                 <BenchmarkList stores={stores} />
@@ -632,6 +745,17 @@ function Splash({ brand, sub, progress, onSkip }: { brand: string; sub: string; 
         <span className="splash-hint">Chargement des analyses…</span>
       </div>
     </div>
+  );
+}
+
+function DashboardSkeleton({ label }: { label: string }) {
+  return (
+    <section className="skeleton-shell" aria-label={label}>
+      <span>{label}</span>
+      <div className="skeleton-grid">
+        {Array.from({ length: 7 }).map((_, index) => <i key={index} />)}
+      </div>
+    </section>
   );
 }
 
@@ -723,6 +847,31 @@ function StatusBadge({ tone, label }: { tone: Tone; label: string }) {
   return <span className={`status-badge ${tone}`}>{label}</span>;
 }
 
+function Sparkline({ values }: { values: number[] }) {
+  const clean = values.filter((value) => Number.isFinite(value));
+  const series = clean.length >= 2
+    ? clean
+    : clean.length === 1
+      ? [clean[0] * 0.86, clean[0], clean[0] * 0.94]
+      : [18, 34, 26, 42];
+  const min = Math.min(...series);
+  const max = Math.max(...series);
+  const range = Math.max(1, max - min);
+  const points = series
+    .map((value, index) => {
+      const x = (index / (series.length - 1)) * 100;
+      const y = 30 - ((value - min) / range) * 24;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+
+  return (
+    <svg className="sparkline" viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden="true">
+      <polyline points={points} />
+    </svg>
+  );
+}
+
 function MetricCard({
   label,
   value,
@@ -730,6 +879,7 @@ function MetricCard({
   tone = 'primary',
   pulse = false,
   sub,
+  spark,
 }: {
   label: string;
   value: string;
@@ -737,6 +887,7 @@ function MetricCard({
   tone?: Tone;
   pulse?: boolean;
   sub?: string;
+  spark?: number[];
 }) {
   return (
     <article className={`metric-card ${tone}${pulse ? ' pulse' : ''}`}>
@@ -744,6 +895,7 @@ function MetricCard({
       <strong><CountUp value={value} /></strong>
       <small>{detail}</small>
       {sub ? <small className="metric-sub">{sub}</small> : null}
+      {spark ? <Sparkline values={spark} /> : null}
     </article>
   );
 }
@@ -819,6 +971,22 @@ function DecisionStack({ items }: { items: [string, string][] }) {
   );
 }
 
+function ActivityFeed({ items }: { items: ActivityItem[] }) {
+  return (
+    <div className="activity-feed">
+      {items.map((item) => (
+        <div className="activity-item" key={`${item.avatar}-${item.title}`}>
+          <span className={`activity-avatar ${item.tone}`}>{item.avatar}</span>
+          <div>
+            <strong>{item.title}</strong>
+            <small>{item.meta}</small>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function CategoryList({ categories }: { categories: CategoryScore[] }) {
   if (categories.length === 0) return <p className="muted">Aucune categorie sous performance detectee.</p>;
 
@@ -839,32 +1007,144 @@ function CategoryList({ categories }: { categories: CategoryScore[] }) {
 }
 
 function MoroccoMapPlaceholder() {
+  const mapUrl = 'https://www.openstreetmap.org/export/embed.html?bbox=-17.8,20.4,-0.8,36.2&layer=mapnik';
+  const fullMapUrl = 'https://www.openstreetmap.org/#map=5/28.7/-9.3';
+
   return (
     <div className="morocco-map" aria-label="Carte vide du reseau Maroc incluant le Sahara">
       <div className="map-canvas">
-        <div className="map-compass">N</div>
-        <svg className="morocco-outline" viewBox="0 0 320 520" role="img" aria-label="Maroc incluant le Sahara">
-          <path
-            className="map-land"
-            d="M177 20 L218 43 L230 88 L212 133 L232 179 L216 219 L246 266 L231 311 L258 363 L239 425 L260 501 L142 501 L121 447 L132 392 L104 350 L119 302 L92 260 L113 214 L96 165 L122 122 L116 75 L145 38 Z"
-          />
-          <path
-            className="map-sahara"
-            d="M119 302 L231 311 L258 363 L239 425 L260 501 L142 501 L121 447 L132 392 L104 350 Z"
-          />
-          <path
-            className="map-coast"
-            d="M145 38 C118 86 109 129 117 168 C126 213 110 235 96 260 C81 287 101 318 104 350 C110 401 111 455 142 501"
-          />
-        </svg>
-        <span className="map-label map-label-north">Maroc</span>
-        <span className="map-label map-label-sahara">Sahara</span>
-        <span className="map-label map-label-ocean">Atlantique</span>
+        <iframe
+          title="Carte OpenStreetMap du Maroc incluant le Sahara"
+          src={mapUrl}
+          loading="lazy"
+          referrerPolicy="no-referrer-when-downgrade"
+        />
+        <div className="map-overlay">
+          <span>Maroc & Sahara</span>
+          <a href={fullMapUrl} target="_blank" rel="noreferrer">Ouvrir la carte</a>
+        </div>
       </div>
       <div className="map-empty">
         <StatusBadge tone="warning" label="Carte vide" />
-        <p>Aucune adresse magasin n'est renseignee pour le moment. Les marqueurs seront ajoutes des que les magasins seront geolocalises.</p>
+        <p>Aucune adresse magasin n'est renseignee pour le moment.</p>
       </div>
+    </div>
+  );
+}
+
+function NetworkGoals({
+  conformity,
+  critical,
+  correctionRate,
+  highRiskStores,
+}: {
+  conformity: number;
+  critical: number;
+  correctionRate: number;
+  highRiskStores: number;
+}) {
+  const goals = [
+    {
+      label: 'Remplissage reseau',
+      value: pct(conformity),
+      target: 'Objectif 90%',
+      progress: clamp((conformity / 90) * 100),
+      tone: conformity >= 90 ? 'success' : conformity >= 75 ? 'warning' : 'danger',
+    },
+    {
+      label: 'Alertes critiques',
+      value: String(critical),
+      target: 'Objectif 0',
+      progress: critical === 0 ? 100 : clamp(100 - critical * 12),
+      tone: critical === 0 ? 'success' : critical <= 2 ? 'warning' : 'danger',
+    },
+    {
+      label: 'Correction anomalies',
+      value: pct(correctionRate),
+      target: 'Objectif 80%',
+      progress: clamp((correctionRate / 80) * 100),
+      tone: correctionRate >= 80 ? 'success' : correctionRate >= 50 ? 'warning' : 'danger',
+    },
+    {
+      label: 'Magasins risque haut',
+      value: String(highRiskStores),
+      target: 'Objectif 0',
+      progress: highRiskStores === 0 ? 100 : clamp(100 - highRiskStores * 18),
+      tone: highRiskStores === 0 ? 'success' : highRiskStores <= 2 ? 'warning' : 'danger',
+    },
+  ] as const;
+
+  return (
+    <div className="goal-grid">
+      {goals.map((goal) => (
+        <div className={`goal-card ${goal.tone}`} key={goal.label}>
+          <div>
+            <span>{goal.label}</span>
+            <strong>{goal.value}</strong>
+            <small>{goal.target}</small>
+          </div>
+          <div className="goal-progress">
+            <i style={{ width: `${goal.progress}%` }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HqActionPlan({
+  worstStore,
+  weakCategory,
+  highRiskStores,
+}: {
+  worstStore?: StoreScore;
+  weakCategory?: CategoryScore;
+  highRiskStores: number;
+}) {
+  const steps = [
+    {
+      horizon: '24h',
+      title: worstStore ? `Aligner ${worstStore.store}` : 'Confirmer la priorite magasin',
+      detail: worstStore
+        ? `Traiter ${worstStore.critical} audits critiques et relancer un controle cible.`
+        : 'Aucun magasin prioritaire detecte sur la periode.',
+      tone: worstStore?.priority === 'Haute' ? 'danger' : 'warning',
+    },
+    {
+      horizon: '48h',
+      title: weakCategory ? `Focus categorie ${weakCategory.category}` : 'Verifier categories faibles',
+      detail: weakCategory
+        ? `${weakCategory.emptySpaces} facings vides et ${pct(weakCategory.conformity)} de conformite.`
+        : 'Pas de categorie faible identifiee.',
+      tone: weakCategory && weakCategory.conformity < 75 ? 'danger' : 'warning',
+    },
+    {
+      horizon: '7j',
+      title: 'Standardiser les corrections',
+      detail: highRiskStores > 0
+        ? `Dupliquer le plan sur ${highRiskStores} magasin(s) en risque haut.`
+        : 'Maintenir le rythme actuel de correction terrain.',
+      tone: highRiskStores > 0 ? 'warning' : 'success',
+    },
+    {
+      horizon: '30j',
+      title: 'Revue execution merchandising',
+      detail: 'Comparer les magasins, ajuster les seuils et preparer le rapport reseau.',
+      tone: 'primary',
+    },
+  ] as const;
+
+  return (
+    <div className="action-plan">
+      {steps.map((step) => (
+        <div className={`action-step ${step.tone}`} key={step.horizon}>
+          <span>{step.horizon}</span>
+          <div>
+            <strong>{step.title}</strong>
+            <small>{step.detail}</small>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
