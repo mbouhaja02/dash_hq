@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { getComplianceScore } from './shelfguideCalculations';
 
 export type GroupKey = 'store_name' | 'shelf_name' | 'category';
 
@@ -25,6 +26,31 @@ export interface AnalysisRow {
   shelf_profitability_percent: number;
   money_value_available: boolean;
 }
+
+export type ShelfGuideAnalysis = {
+  id?: string | number | null;
+  store_name?: string | null;
+  shelf_name?: string | null;
+  category?: string | null;
+  audit_date?: string | null;
+  created_at?: string | null;
+  status?: string | null;
+  severity?: string | null;
+  recommendation?: string | null;
+  empty_spaces?: number | string | null;
+  raw_products_detected?: number | string | null;
+  products_analyzed?: number | string | null;
+  front_products?: number | string | null;
+  back_products?: number | string | null;
+  product_groups?: number | string | null;
+  empty_ratio_percent?: number | string | null;
+  back_ratio_percent?: number | string | null;
+  weighted_loss_percent?: number | string | null;
+  weighted_profitability_percent?: number | string | null;
+  shelf_loss_percent?: number | string | null;
+  shelf_profitability_percent?: number | string | null;
+  money_value_available?: boolean | number | string | null;
+};
 
 export interface DashboardGroup {
   label: string;
@@ -60,12 +86,17 @@ const supabase = isSupabaseConfigured
 export const supabaseClient = supabase;
 
 function numeric(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
 }
 
-function normalize(row: any): AnalysisRow {
+function normalize(row: ShelfGuideAnalysis): AnalysisRow {
   return {
-    id: String(row.id),
+    id: String(row.id ?? crypto.randomUUID?.() ?? Math.random()),
     store_name: row.store_name ?? 'Magasin',
     shelf_name: row.shelf_name ?? 'Rayon',
     category: row.category ?? 'Autre',
@@ -85,7 +116,7 @@ function normalize(row: any): AnalysisRow {
     weighted_profitability_percent: numeric(row.weighted_profitability_percent),
     shelf_loss_percent: numeric(row.shelf_loss_percent),
     shelf_profitability_percent: numeric(row.shelf_profitability_percent),
-    money_value_available: Boolean(row.money_value_available),
+    money_value_available: row.money_value_available === true || row.money_value_available === 1 || row.money_value_available === '1',
   };
 }
 
@@ -123,7 +154,7 @@ export function summarize(rows: AnalysisRow[]) {
   return {
     audits: rows.length,
     stores: new Set(rows.map((row) => row.store_name)).size,
-    avgProfitability: average(rows.map((row) => row.weighted_profitability_percent)),
+    avgProfitability: average(rows.map((row) => getComplianceScore(row))),
     critical: rows.filter((row) => row.status === 'Critique' || row.severity === 'high').length,
     emptySpaces: rows.reduce((sum, row) => sum + row.empty_spaces, 0),
     backProducts: rows.reduce((sum, row) => sum + row.back_products, 0),
@@ -144,7 +175,7 @@ export function groupRows(rows: AnalysisRow[], key: GroupKey): DashboardGroup[] 
     .map(([label, items]) => ({
       label,
       count: items.length,
-      avgProfitability: average(items.map((item) => item.weighted_profitability_percent)),
+      avgProfitability: average(items.map((item) => getComplianceScore(item))),
       emptySpaces: items.reduce((sum, item) => sum + item.empty_spaces, 0),
       backProducts: items.reduce((sum, item) => sum + item.back_products, 0),
       criticalCount: items.filter((item) => item.status === 'Critique' || item.severity === 'high').length,
@@ -155,7 +186,7 @@ export function groupRows(rows: AnalysisRow[], key: GroupKey): DashboardGroup[] 
 
 export function worstRows(rows: AnalysisRow[], count = 8): AnalysisRow[] {
   return [...rows]
-    .sort((a, b) => a.weighted_profitability_percent - b.weighted_profitability_percent)
+    .sort((a, b) => getComplianceScore(a) - getComplianceScore(b))
     .slice(0, count);
 }
 

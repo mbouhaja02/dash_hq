@@ -13,6 +13,16 @@ import {
 } from './dashboard';
 import { dashboardConfig } from './config';
 import { generateHqReport } from './report';
+import {
+  getComplianceScore,
+  getFillRate,
+  getMainIssue,
+  getPriorityLevel,
+  getSeverityLevel,
+  issueWeight,
+  priorityWeight,
+  type MainIssue,
+} from './shelfguideCalculations';
 import './styles.css';
 
 type Tone = 'danger' | 'warning' | 'success' | 'primary';
@@ -25,11 +35,13 @@ interface StoreScore {
   shelves: number;
   categories: number;
   conformity: number;
+  fillRate: number;
   emptyRatio: number;
   backRatio: number;
   critical: number;
   medium: number;
   issues: number;
+  dominantIssue: MainIssue;
   priority: Priority;
   score: number;
   lastAudit: string;
@@ -39,9 +51,12 @@ interface CategoryScore {
   category: string;
   audits: number;
   conformity: number;
+  fillRate: number;
+  stores: number;
   critical: number;
   emptySpaces: number;
   backProducts: number;
+  dominantIssue: MainIssue;
 }
 
 interface TimelinePoint {
@@ -75,9 +90,7 @@ function shortDay(value: string): string {
 }
 
 function statusOf(row: AnalysisRow): string {
-  if (row.status === 'Critique' || row.severity === 'high' || row.weighted_profitability_percent < 65) return 'Critique';
-  if (row.status === 'Moyen' || row.weighted_profitability_percent < 85) return 'Moyen';
-  return 'Bon';
+  return getSeverityLevel(row);
 }
 
 function toneFromPriority(priority: Priority): Tone {
@@ -102,11 +115,28 @@ function buildStores(rows: AnalysisRow[]): StoreScore[] {
       const sorted = [...items].sort((a, b) => new Date(b.audit_date).getTime() - new Date(a.audit_date).getTime());
       const critical = items.filter((item) => statusOf(item) === 'Critique').length;
       const medium = items.filter((item) => statusOf(item) === 'Moyen').length;
-      const conformity = average(items.map((item) => item.weighted_profitability_percent));
+      const conformity = average(items.map((item) => getComplianceScore(item)));
+      const fillRate = average(items.map((item) => getFillRate(item)));
       const emptyRatio = average(items.map((item) => item.empty_ratio_percent));
       const backRatio = average(items.map((item) => item.back_ratio_percent));
       const issues = issueCount(items);
-      const score = (100 - conformity) + emptyRatio * 1.5 + backRatio * 1.2 + critical * 8 + medium * 3;
+      const issueCounts = new Map<MainIssue, number>();
+      for (const item of items) {
+        const issue = getMainIssue(item);
+        issueCounts.set(issue, (issueCounts.get(issue) ?? 0) + 1);
+      }
+      const dominantIssue = Array.from(issueCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'Rayon conforme';
+      const worstPriority = items
+        .map(getPriorityLevel)
+        .sort((a, b) => priorityWeight(b) - priorityWeight(a))[0] ?? 'Faible';
+      const score =
+        (100 - conformity) +
+        emptyRatio * 1.5 +
+        backRatio * 1.2 +
+        critical * 8 +
+        medium * 3 +
+        priorityWeight(worstPriority) * 8 +
+        issueWeight(dominantIssue) * 4;
       const priority: Priority = score >= 70 || critical >= 3 ? 'Haute' : score >= 35 || medium >= 3 ? 'Moyenne' : 'Faible';
 
       return {
@@ -115,11 +145,13 @@ function buildStores(rows: AnalysisRow[]): StoreScore[] {
         shelves: new Set(items.map((item) => item.shelf_name)).size,
         categories: new Set(items.map((item) => item.category)).size,
         conformity,
+        fillRate,
         emptyRatio,
         backRatio,
         critical,
         medium,
         issues,
+        dominantIssue,
         priority,
         score,
         lastAudit: sorted[0]?.audit_date ?? new Date().toISOString(),
@@ -139,10 +171,13 @@ function buildCategories(rows: AnalysisRow[]): CategoryScore[] {
     .map(([category, items]) => ({
       category,
       audits: items.length,
-      conformity: average(items.map((item) => item.weighted_profitability_percent)),
+      conformity: average(items.map((item) => getComplianceScore(item))),
+      fillRate: average(items.map((item) => getFillRate(item))),
+      stores: new Set(items.map((item) => item.store_name)).size,
       critical: items.filter((item) => statusOf(item) === 'Critique').length,
       emptySpaces: items.reduce((sum, item) => sum + item.empty_spaces, 0),
       backProducts: items.reduce((sum, item) => sum + item.back_products, 0),
+      dominantIssue: getMainIssue([...items].sort((a, b) => getComplianceScore(a) - getComplianceScore(b))[0]),
     }))
     .sort((a, b) => a.conformity - b.conformity)
     .slice(0, 6);
@@ -165,7 +200,7 @@ function buildTimeline(rows: AnalysisRow[], maxPoints = 7): TimelinePoint[] {
 
       return {
         label: shortDay(key),
-        conformity: average(items.map((item) => item.weighted_profitability_percent)),
+        conformity: average(items.map((item) => getComplianceScore(item))),
         issues,
         corrected: Math.max(0, previous - issues),
       };
@@ -192,21 +227,23 @@ function toggleFullscreen(): void {
   else void document.documentElement.requestFullscreen?.();
 }
 
-type Range = '7d' | '30d' | 'all';
-const RANGE_DAYS: Record<Range, number> = { '7d': 7, '30d': 30, all: 36500 };
-const RANGE_LABELS: Record<Range, string> = { '7d': '7 jours', '30d': '30 jours', all: 'Tout' };
+type Range = 'today' | '7d' | '30d' | 'all';
+const RANGE_DAYS: Record<Exclude<Range, 'today' | 'all'>, number> = { '7d': 7, '30d': 30 };
+const RANGE_LABELS: Record<Range, string> = { today: "Aujourd'hui", '7d': '7 jours', '30d': '30 jours', all: 'Tout' };
 const DEFAULT_EMPTY = 10;
 const DEFAULT_BACK = 7;
 
 function readTheme(): Theme {
   try {
-    return window.localStorage.getItem('shelfguide-theme') === 'dark' ? 'dark' : 'light';
+    const stored = window.localStorage.getItem('shelfguide-theme-v2');
+    return stored === 'light' ? 'light' : 'dark';
   } catch {
-    return 'light';
+    return 'dark';
   }
 }
 
 function scopeByRange(rows: AnalysisRow[], range: Range): AnalysisRow[] {
+  if (range === 'today') return rows.filter((row) => dayKey(row.audit_date) === dayKey(new Date().toISOString()));
   if (range === 'all') return rows;
   const cutoff = Date.now() - RANGE_DAYS[range] * 86400000;
   return rows.filter((row) => new Date(row.audit_date).getTime() >= cutoff);
@@ -216,7 +253,7 @@ function readParams() {
   const p = new URLSearchParams(window.location.search);
   const r = p.get('range');
   return {
-    range: (r === '7d' || r === '30d' || r === 'all' ? r : 'all') as Range,
+    range: (r === 'today' || r === '7d' || r === '30d' || r === 'all' ? r : 'all') as Range,
     query: p.get('q') ?? '',
     emptyTh: Number(p.get('empty')) || DEFAULT_EMPTY,
     backTh: Number(p.get('back')) || DEFAULT_BACK,
@@ -298,6 +335,9 @@ export default function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [splashProgress, setSplashProgress] = useState(8);
   const [theme, setTheme] = useState<Theme>(readTheme);
+  const [selectedStore, setSelectedStore] = useState('all');
+  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [selectedPerformance, setSelectedPerformance] = useState<'all' | 'critical' | 'watch' | 'healthy'>('all');
   const quickSearchRef = useRef<HTMLInputElement>(null);
 
   // Splash : barre de progression au premier chargement uniquement
@@ -333,7 +373,7 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     try {
-      window.localStorage.setItem('shelfguide-theme', theme);
+      window.localStorage.setItem('shelfguide-theme-v2', theme);
     } catch {
       // Storage can be unavailable in restricted embeds.
     }
@@ -350,7 +390,24 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const scopedRows = useMemo(() => scopeByRange(rows, range), [rows, range]);
+  const rangedRows = useMemo(() => scopeByRange(rows, range), [rows, range]);
+  const storeOptions = useMemo(
+    () => Array.from(new Set(rangedRows.map((row) => row.store_name).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [rangedRows],
+  );
+  const categoryOptions = useMemo(
+    () => Array.from(new Set(rangedRows.map((row) => row.category).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [rangedRows],
+  );
+  const scopedRows = useMemo(() => rangedRows.filter((row) => {
+    const score = getComplianceScore(row);
+    if (selectedStore !== 'all' && row.store_name !== selectedStore) return false;
+    if (selectedCategory !== 'all' && row.category !== selectedCategory) return false;
+    if (selectedPerformance === 'critical' && !(statusOf(row) === 'Critique' || score < 70)) return false;
+    if (selectedPerformance === 'watch' && !(statusOf(row) === 'Moyen' || (score >= 70 && score < 85))) return false;
+    if (selectedPerformance === 'healthy' && !(statusOf(row) === 'Bon' && score >= 85)) return false;
+    return true;
+  }), [rangedRows, selectedStore, selectedCategory, selectedPerformance]);
   const summary = useMemo(() => summarize(scopedRows), [scopedRows]);
   const stores = useMemo(() => buildStores(scopedRows), [scopedRows]);
   const categories = useMemo(() => buildCategories(scopedRows), [scopedRows]);
@@ -377,9 +434,9 @@ export default function App() {
   function exportCsv() {
     downloadCsv(
       `shelfguide-hq-magasins-${dayKey(new Date().toISOString())}.csv`,
-      ['Magasin', 'Conformite %', 'Critiques', 'Moyens', 'Vide %', 'Back-side %', 'Rayons', 'Categories', 'Audits', 'Priorite', 'Dernier audit'],
+      ['Magasin', 'Conformite %', 'Remplissage %', 'Probleme dominant', 'Critiques', 'Moyens', 'Vide %', 'Back-side %', 'Rayons', 'Categories', 'Audits', 'Priorite', 'Dernier audit'],
       stores.map((s) => [
-        s.store, Math.round(s.conformity), s.critical, s.medium,
+        s.store, Math.round(s.conformity), Math.round(s.fillRate), s.dominantIssue, s.critical, s.medium,
         Math.round(s.emptyRatio), Math.round(s.backRatio), s.shelves, s.categories, s.audits,
         s.priority, formatDate(s.lastAudit),
       ]),
@@ -426,6 +483,7 @@ export default function App() {
   const correctionRate = latestTimeline
     ? (latestTimeline.corrected / Math.max(1, latestTimeline.corrected + latestTimeline.issues)) * 100
     : 0;
+  const avgFillRate = average(scopedRows.map((row) => getFillRate(row)));
   const alertCount = highRiskStores + riskCategories;
   const activityItems: ActivityItem[] = [
     worstStore
@@ -467,6 +525,18 @@ export default function App() {
   const hoursSaved = (summary.audits * dashboardConfig.minPerManualAudit) / 60;
   const conformityGap = Math.max(1, 100 - summary.avgProfitability);
   const recovered = ruptureCostDaily * (Math.min(boost, conformityGap) / conformityGap);
+  const hasActiveFilters =
+    query.trim().length > 0 ||
+    selectedStore !== 'all' ||
+    selectedCategory !== 'all' ||
+    selectedPerformance !== 'all';
+
+  function resetFilters() {
+    setQuery('');
+    setSelectedStore('all');
+    setSelectedCategory('all');
+    setSelectedPerformance('all');
+  }
 
   return (
     <>
@@ -520,7 +590,7 @@ export default function App() {
               <kbd>Ctrl K</kbd>
             </label>
             <div className="seg" role="group" aria-label="Periode d'analyse">
-              {(['7d', '30d', 'all'] as Range[]).map((r) => (
+              {(['today', '7d', '30d', 'all'] as Range[]).map((r) => (
                 <button key={r} className={range === r ? 'active' : ''} onClick={() => setRange(r)}>{RANGE_LABELS[r]}</button>
               ))}
             </div>
@@ -575,13 +645,18 @@ export default function App() {
         {loading ? <DashboardSkeleton label="Chargement des analyses reseau..." /> : null}
 
         {!loading && rows.length === 0 && !error ? (
-          <div className="empty">Aucune analyse disponible pour le reseau.</div>
+          <EmptyState
+            title="Aucun audit reseau trouve"
+            detail="La connexion Supabase est active, mais aucune analyse ne correspond encore au perimetre HQ."
+            actionLabel="Reinitialiser les filtres"
+            onAction={resetFilters}
+          />
         ) : null}
 
         {rows.length > 0 ? (
           <>
-            <section className="command-grid">
-              <article className="command-card score-card">
+            <section className="command-grid hq-command-grid">
+              <article className="command-card score-card network-score-card">
                 <div className="section-heading">
                   <span>Score reseau</span>
                   <StatusBadge tone={networkClean ? 'success' : 'warning'} label={networkClean ? 'Stable' : 'Sous surveillance'} />
@@ -597,7 +672,7 @@ export default function App() {
                 </div>
               </article>
 
-              <article className="command-card priority-card">
+              <article className="command-card priority-card priority-store-card">
                 <div className="section-heading">
                   <span>Magasin prioritaire</span>
                   <StatusBadge tone={worstStore ? toneFromPriority(worstStore.priority) : 'primary'} label={worstStore?.priority ?? 'N/A'} />
@@ -610,7 +685,7 @@ export default function App() {
                 </div>
               </article>
 
-              <article className="command-card execution-card">
+              <article className="command-card execution-card network-corrections-card">
                 <div className="section-heading">
                   <span>Corrections reseau</span>
                   <StatusBadge tone={(latestTimeline?.corrected ?? 0) > 0 ? 'success' : 'warning'} label={`${latestTimeline?.corrected ?? 0} corrigees`} />
@@ -623,10 +698,23 @@ export default function App() {
               </article>
             </section>
 
+            <HqFilterBar
+              stores={storeOptions}
+              categories={categoryOptions}
+              selectedStore={selectedStore}
+              selectedCategory={selectedCategory}
+              selectedPerformance={selectedPerformance}
+              onStore={setSelectedStore}
+              onCategory={setSelectedCategory}
+              onPerformance={setSelectedPerformance}
+              active={hasActiveFilters}
+              onReset={resetFilters}
+            />
+
             <section className="metric-grid">
-              <MetricCard label="Magasins suivis" value={String(summary.stores)} detail={`${stores.length} magasins analyses`} />
-              <MetricCard label="Audits realises ce mois" value={String(auditsThisMonth)} detail={`${summary.audits} audits visibles`} />
-              <MetricCard label="Taux moyen de remplissage reseau" value={pct(summary.avgProfitability)} detail="Score moyen reseau" tone="success" spark={timeline.map((point) => point.conformity)} />
+              <MetricCard label="Magasins suivis" value={String(summary.stores)} detail={`${stores.length} magasins analyses`} variant="operational" />
+              <MetricCard label="Audits realises ce mois" value={String(auditsThisMonth)} detail={`${summary.audits} audits visibles`} variant="operational" />
+              <MetricCard label="Taux moyen de remplissage reseau" value={pct(avgFillRate)} detail="Facings remplis" tone="success" spark={timeline.map((point) => point.conformity)} variant="primary" />
               <MetricCard
                 label="Ruptures critiques detectees"
                 value={String(summary.critical)}
@@ -634,10 +722,11 @@ export default function App() {
                 tone={summary.critical > 0 ? 'danger' : 'success'}
                 pulse={summary.critical > 0}
                 spark={timeline.map((point) => point.issues)}
+                variant="risk"
               />
-              <MetricCard label="Categories a risque" value={String(riskCategories)} detail={`${categories.length} categories suivies`} tone={riskCategories > 0 ? 'warning' : 'success'} />
-              <MetricCard label="Magasins sous performance" value={String(underperformingStores)} detail={`${highRiskStores} risque haut`} tone={underperformingStores > 0 ? 'warning' : 'success'} />
-              <MetricCard label="Taux de correction" value={pct(correctionRate)} detail="Anomalies corrigees" tone="success" spark={timeline.map((point) => point.corrected)} />
+              <MetricCard label="Categories a risque" value={String(riskCategories)} detail={`${categories.length} categories suivies`} tone={riskCategories > 0 ? 'warning' : 'success'} variant="risk" />
+              <MetricCard label="Magasins sous performance" value={String(underperformingStores)} detail={`${highRiskStores} risque haut`} tone={underperformingStores > 0 ? 'warning' : 'success'} variant="insight" />
+              <MetricCard label="Taux de correction" value={pct(correctionRate)} detail="Anomalies corrigees" tone="success" spark={timeline.map((point) => point.corrected)} variant="progress" />
             </section>
 
             <BusinessBand
@@ -661,8 +750,7 @@ export default function App() {
                     onChange={(event) => setQuery(event.target.value)}
                   />
                 </div>
-                <StoreTable stores={filteredStores.slice(0, 12)} emptyTh={emptyTh} backTh={backTh} />
-                {filteredStores.length === 0 ? <p className="muted">Aucun magasin ne correspond a la recherche.</p> : null}
+                <StoreTable stores={filteredStores.slice(0, 12)} emptyTh={emptyTh} backTh={backTh} onReset={resetFilters} />
               </section>
 
               <section className="panel decisions-panel">
@@ -675,6 +763,7 @@ export default function App() {
                     ['Action attendue', worstStore ? 'Aligner manager magasin' : 'Maintenir controle'],
                   ]}
                 />
+                <NetworkHealthStrip stores={stores} />
               </section>
 
               <section className="panel alerts-panel" id="categories">
@@ -683,17 +772,17 @@ export default function App() {
               </section>
 
               <section className="panel map-panel" id="map">
-                <PanelTitle eyebrow="Carte reseau" title="Maroc & Sahara" />
-                <MoroccoMapPlaceholder />
+                <PanelTitle eyebrow="Carte reseau" title="Region Casablanca" />
+                <MoroccoMapPlaceholder stores={stores.slice(0, 6)} />
               </section>
 
               <section className="panel objectives-panel" id="objectives">
                 <PanelTitle eyebrow="Objectifs reseau" title="Pilotage des cibles HQ" />
                 <NetworkGoals
                   conformity={summary.avgProfitability}
-                  critical={summary.critical}
-                  correctionRate={correctionRate}
-                  highRiskStores={highRiskStores}
+                  fillRate={avgFillRate}
+                  backRate={summary.avgBackRatio}
+                  auditsThisMonth={auditsThisMonth}
                 />
               </section>
 
@@ -756,6 +845,36 @@ function DashboardSkeleton({ label }: { label: string }) {
         {Array.from({ length: 7 }).map((_, index) => <i key={index} />)}
       </div>
     </section>
+  );
+}
+
+function EmptyState({
+  title,
+  detail,
+  actionLabel,
+  onAction,
+  compact = false,
+}: {
+  title: string;
+  detail: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  compact?: boolean;
+}) {
+  return (
+    <div className={`empty-state${compact ? ' compact' : ''}`} role="status">
+      <div className="empty-illustration" aria-hidden="true">
+        <span />
+        <i />
+      </div>
+      <div>
+        <strong>{title}</strong>
+        <p>{detail}</p>
+      </div>
+      {actionLabel && onAction ? (
+        <button className="ghost-btn reset-btn" type="button" onClick={onAction}>{actionLabel}</button>
+      ) : null}
+    </div>
   );
 }
 
@@ -880,6 +999,7 @@ function MetricCard({
   pulse = false,
   sub,
   spark,
+  variant = 'operational',
 }: {
   label: string;
   value: string;
@@ -888,15 +1008,71 @@ function MetricCard({
   pulse?: boolean;
   sub?: string;
   spark?: number[];
+  variant?: 'primary' | 'risk' | 'operational' | 'progress' | 'insight';
 }) {
   return (
-    <article className={`metric-card ${tone}${pulse ? ' pulse' : ''}`}>
+    <article className={`metric-card metric-${variant} ${tone}${pulse ? ' pulse' : ''}`}>
       <span>{label}{pulse ? <i className="live-dot" aria-hidden="true" /> : null}</span>
       <strong><CountUp value={value} /></strong>
       <small>{detail}</small>
       {sub ? <small className="metric-sub">{sub}</small> : null}
       {spark ? <Sparkline values={spark} /> : null}
     </article>
+  );
+}
+
+function HqFilterBar({
+  stores,
+  categories,
+  selectedStore,
+  selectedCategory,
+  selectedPerformance,
+  onStore,
+  onCategory,
+  onPerformance,
+  active,
+  onReset,
+}: {
+  stores: string[];
+  categories: string[];
+  selectedStore: string;
+  selectedCategory: string;
+  selectedPerformance: 'all' | 'critical' | 'watch' | 'healthy';
+  onStore: (value: string) => void;
+  onCategory: (value: string) => void;
+  onPerformance: (value: 'all' | 'critical' | 'watch' | 'healthy') => void;
+  active: boolean;
+  onReset: () => void;
+}) {
+  return (
+    <section className="filter-bar" aria-label="Filtres reseau">
+      <label>
+        <span>Magasin</span>
+        <select value={selectedStore} onChange={(event) => onStore(event.target.value)}>
+          <option value="all">Tous magasins</option>
+          {stores.map((store) => <option key={store} value={store}>{store}</option>)}
+        </select>
+      </label>
+      <label>
+        <span>Categorie</span>
+        <select value={selectedCategory} onChange={(event) => onCategory(event.target.value)}>
+          <option value="all">Toutes categories</option>
+          {categories.map((category) => <option key={category} value={category}>{category}</option>)}
+        </select>
+      </label>
+      <label>
+        <span>Performance</span>
+        <select value={selectedPerformance} onChange={(event) => onPerformance(event.target.value as 'all' | 'critical' | 'watch' | 'healthy')}>
+          <option value="all">Tout reseau</option>
+          <option value="critical">Critique</option>
+          <option value="watch">Sous surveillance</option>
+          <option value="healthy">Conforme</option>
+        </select>
+      </label>
+      <button className="filter-reset" type="button" onClick={onReset} disabled={!active}>
+        Reset filtres
+      </button>
+    </section>
   );
 }
 
@@ -920,7 +1096,19 @@ function RatioCell({ value, tone }: { value: number; tone: Tone }) {
   );
 }
 
-function StoreTable({ stores, emptyTh, backTh }: { stores: StoreScore[]; emptyTh: number; backTh: number }) {
+function StoreTable({ stores, emptyTh, backTh, onReset }: { stores: StoreScore[]; emptyTh: number; backTh: number; onReset: () => void }) {
+  if (stores.length === 0) {
+    return (
+      <EmptyState
+        compact
+        title="Aucun magasin trouve"
+        detail="Le filtre courant ne retourne aucun magasin reseau."
+        actionLabel="Reset filtres"
+        onAction={onReset}
+      />
+    );
+  }
+
   return (
     <div className="table-wrap">
       <table>
@@ -928,6 +1116,8 @@ function StoreTable({ stores, emptyTh, backTh }: { stores: StoreScore[]; emptyTh
           <tr>
             <th>Magasin</th>
             <th>Conformite</th>
+            <th>Remplissage</th>
+            <th>Probleme</th>
             <th>Critiques</th>
             <th>Vide</th>
             <th>Back-side</th>
@@ -938,12 +1128,14 @@ function StoreTable({ stores, emptyTh, backTh }: { stores: StoreScore[]; emptyTh
         </thead>
         <tbody>
           {stores.map((store) => (
-            <tr key={store.store}>
+            <tr key={store.store} className={`row-${toneFromPriority(store.priority)}`}>
               <td>
                 <strong>{store.store}</strong>
                 <small>{store.categories} categories - {store.audits} audits</small>
               </td>
               <td><RatioCell value={store.conformity} tone={store.conformity >= 85 ? 'success' : store.conformity >= 65 ? 'warning' : 'danger'} /></td>
+              <td><RatioCell value={store.fillRate} tone={store.fillRate >= 95 ? 'success' : store.fillRate >= 85 ? 'warning' : 'danger'} /></td>
+              <td>{store.dominantIssue}</td>
               <td>{store.critical}</td>
               <td><RatioCell value={store.emptyRatio} tone={store.emptyRatio >= emptyTh ? 'danger' : store.emptyRatio >= emptyTh * 0.7 ? 'warning' : 'success'} /></td>
               <td><RatioCell value={store.backRatio} tone={store.backRatio >= backTh ? 'warning' : 'success'} /></td>
@@ -971,6 +1163,24 @@ function DecisionStack({ items }: { items: [string, string][] }) {
   );
 }
 
+function NetworkHealthStrip({ stores }: { stores: StoreScore[] }) {
+  const critical = stores.filter((store) => store.priority === 'Haute').length;
+  const watch = stores.filter((store) => store.priority === 'Moyenne').length;
+  const healthy = stores.filter((store) => store.priority === 'Faible').length;
+  const total = Math.max(1, critical + watch + healthy);
+
+  return (
+    <div className="network-health-strip" aria-label="Repartition sante magasins">
+      <i className="success" style={{ width: `${(healthy / total) * 100}%` }} />
+      <i className="warning" style={{ width: `${(watch / total) * 100}%` }} />
+      <i className="danger" style={{ width: `${(critical / total) * 100}%` }} />
+      <span>{healthy} stables</span>
+      <span>{watch} a surveiller</span>
+      <span>{critical} critiques</span>
+    </div>
+  );
+}
+
 function ActivityFeed({ items }: { items: ActivityItem[] }) {
   return (
     <div className="activity-feed">
@@ -991,14 +1201,17 @@ function CategoryList({ categories }: { categories: CategoryScore[] }) {
   if (categories.length === 0) return <p className="muted">Aucune categorie sous performance detectee.</p>;
 
   return (
-    <div className="recurring-list">
+    <div className="category-risk-matrix" aria-label="Matrice categories a risque">
       {categories.map((category, index) => (
-        <div key={category.category}>
+        <div key={category.category} className={category.critical > 0 || category.conformity < 75 ? 'danger' : category.conformity < 85 ? 'warning' : 'success'}>
           <span>{String(index + 1).padStart(2, '0')}</span>
           <div>
             <strong>{category.category}</strong>
-            <small>{category.critical} critiques - {category.audits} audits</small>
+            <small>{category.dominantIssue} - {category.stores} magasin(s)</small>
           </div>
+          <RatioCell value={category.conformity} tone={category.conformity >= 85 ? 'success' : category.conformity >= 70 ? 'warning' : 'danger'} />
+          <em>{category.critical} crit.</em>
+          <em>{category.emptySpaces} vides</em>
           <em>{pct(category.conformity)}</em>
         </div>
       ))}
@@ -1006,27 +1219,50 @@ function CategoryList({ categories }: { categories: CategoryScore[] }) {
   );
 }
 
-function MoroccoMapPlaceholder() {
-  const mapUrl = 'https://www.openstreetmap.org/export/embed.html?bbox=-17.8,20.4,-0.8,36.2&layer=mapnik';
-  const fullMapUrl = 'https://www.openstreetmap.org/#map=5/28.7/-9.3';
+function MoroccoMapPlaceholder({ stores }: { stores: StoreScore[] }) {
+  const mapUrl = 'https://www.openstreetmap.org/export/embed.html?bbox=-8.15,33.25,-7.05,34.02&layer=mapnik';
+  const fullMapUrl = 'https://www.openstreetmap.org/#map=10/33.5731/-7.5898';
+  const positions = [
+    { left: 50, top: 49 },
+    { left: 57, top: 43 },
+    { left: 45, top: 56 },
+    { left: 62, top: 55 },
+    { left: 38, top: 46 },
+    { left: 52, top: 62 },
+  ];
 
   return (
-    <div className="morocco-map" aria-label="Carte vide du reseau Maroc incluant le Sahara">
+    <div className="morocco-map" aria-label="Carte indicative du reseau autour de Casablanca">
       <div className="map-canvas">
         <iframe
-          title="Carte OpenStreetMap du Maroc incluant le Sahara"
+          title="Carte OpenStreetMap de la region Casablanca"
           src={mapUrl}
           loading="lazy"
           referrerPolicy="no-referrer-when-downgrade"
         />
+        {stores.map((store, index) => {
+          const pos = positions[index % positions.length];
+          return (
+            <div
+              className={`map-marker ${store.priority.toLowerCase()}`}
+              key={store.store}
+              style={{ left: `${pos.left}%`, top: `${pos.top}%` }}
+              title={`${store.store} - ${pct(store.conformity)} - ${store.critical} critiques`}
+            >
+              <span>{index + 1}</span>
+              <strong>{store.store}</strong>
+              <small>{pct(store.conformity)} - {store.critical} crit.</small>
+            </div>
+          );
+        })}
         <div className="map-overlay">
-          <span>Maroc & Sahara</span>
+          <span>Region Casablanca - positions indicatives</span>
           <a href={fullMapUrl} target="_blank" rel="noreferrer">Ouvrir la carte</a>
         </div>
       </div>
       <div className="map-empty">
-        <StatusBadge tone="warning" label="Carte vide" />
-        <p>Aucune adresse magasin n'est renseignee pour le moment.</p>
+        <StatusBadge tone="warning" label="Indicatif" />
+        <p>Les magasins n'ont pas encore de coordonnees en base. Les points sont des positions indicatives pour aider la lecture reseau.</p>
       </div>
     </div>
   );
@@ -1034,43 +1270,44 @@ function MoroccoMapPlaceholder() {
 
 function NetworkGoals({
   conformity,
-  critical,
-  correctionRate,
-  highRiskStores,
+  fillRate,
+  backRate,
+  auditsThisMonth,
 }: {
   conformity: number;
-  critical: number;
-  correctionRate: number;
-  highRiskStores: number;
+  fillRate: number;
+  backRate: number;
+  auditsThisMonth: number;
 }) {
+  const auditTarget = 120;
   const goals = [
     {
-      label: 'Remplissage reseau',
+      label: 'Conformite reseau',
       value: pct(conformity),
       target: 'Objectif 90%',
       progress: clamp((conformity / 90) * 100),
       tone: conformity >= 90 ? 'success' : conformity >= 75 ? 'warning' : 'danger',
     },
     {
-      label: 'Alertes critiques',
-      value: String(critical),
-      target: 'Objectif 0',
-      progress: critical === 0 ? 100 : clamp(100 - critical * 12),
-      tone: critical === 0 ? 'success' : critical <= 2 ? 'warning' : 'danger',
+      label: 'Remplissage',
+      value: pct(fillRate),
+      target: 'Objectif 95%',
+      progress: clamp((fillRate / 95) * 100),
+      tone: fillRate >= 95 ? 'success' : fillRate >= 85 ? 'warning' : 'danger',
     },
     {
-      label: 'Correction anomalies',
-      value: pct(correctionRate),
-      target: 'Objectif 80%',
-      progress: clamp((correctionRate / 80) * 100),
-      tone: correctionRate >= 80 ? 'success' : correctionRate >= 50 ? 'warning' : 'danger',
+      label: 'Back-side reseau',
+      value: pct(backRate),
+      target: 'Maximum 5%',
+      progress: clamp(100 - (backRate / 5) * 100),
+      tone: backRate <= 5 ? 'success' : backRate <= 9 ? 'warning' : 'danger',
     },
     {
-      label: 'Magasins risque haut',
-      value: String(highRiskStores),
-      target: 'Objectif 0',
-      progress: highRiskStores === 0 ? 100 : clamp(100 - highRiskStores * 18),
-      tone: highRiskStores === 0 ? 'success' : highRiskStores <= 2 ? 'warning' : 'danger',
+      label: 'Audits mensuels',
+      value: String(auditsThisMonth),
+      target: `Objectif ${auditTarget}`,
+      progress: clamp((auditsThisMonth / auditTarget) * 100),
+      tone: auditsThisMonth >= auditTarget ? 'success' : auditsThisMonth >= auditTarget * 0.6 ? 'warning' : 'danger',
     },
   ] as const;
 
