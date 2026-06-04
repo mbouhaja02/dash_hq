@@ -25,6 +25,8 @@ import {
 } from './shelfguideCalculations';
 import './styles.css';
 
+const brandLogoUrl = new URL('../WhatsApp Image 2026-04-01 at 23.57.39.jpeg', import.meta.url).href;
+
 type Tone = 'danger' | 'warning' | 'success' | 'primary';
 type Priority = 'Haute' | 'Moyenne' | 'Faible';
 type Theme = 'light' | 'dark';
@@ -541,12 +543,14 @@ export default function App() {
   return (
     <>
       {showSplash ? (
-        <Splash brand="ShelfGuide HQ" sub={dashboardConfig.networkLabel} progress={splashProgress} onSkip={() => setShowSplash(false)} />
+        <Splash brand="ShelfGuide HQ" sub={dashboardConfig.networkLabel} logoUrl={brandLogoUrl} progress={splashProgress} onSkip={() => setShowSplash(false)} />
       ) : null}
       <main className="app-frame">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">HQ</div>
+          <div className="brand-mark logo-mark">
+            <img src={brandLogoUrl} alt="Logo ShelfGuide" />
+          </div>
           <div>
             <strong>ShelfGuide HQ</strong>
             <span>Network command</span>
@@ -824,10 +828,11 @@ export default function App() {
   );
 }
 
-function Splash({ brand, sub, progress, onSkip }: { brand: string; sub: string; progress: number; onSkip: () => void }) {
+function Splash({ brand, sub, logoUrl, progress, onSkip }: { brand: string; sub: string; logoUrl: string; progress: number; onSkip: () => void }) {
   return (
     <div className="splash" onClick={onSkip} role="button" tabIndex={0} aria-label="Passer l'introduction">
       <div className="splash-inner">
+        <img className="splash-logo" src={logoUrl} alt="" aria-hidden="true" />
         <div className="splash-mark">{brand}</div>
         <p className="splash-sub">{sub}</p>
         <div className="splash-bar"><i style={{ width: `${progress}%` }} /></div>
